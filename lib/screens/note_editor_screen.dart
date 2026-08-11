@@ -91,6 +91,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Speech recognition is not available on this device.'),
+          behavior: SnackBarBehavior.floating,
         ),
       );
       return;
@@ -104,7 +105,10 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     await Clipboard.setData(ClipboardData(text: _text.text));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Note copied to clipboard')),
+      const SnackBar(
+        content: Text('Note copied to clipboard'),
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 

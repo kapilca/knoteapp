@@ -34,6 +34,11 @@ class _NotesScreenState extends State<NotesScreen> {
   /// appended after it.
   String _dictationBase = '';
 
+  /// True while the [NoteEditorScreen] is on top. Used to keep this screen's
+  /// speech listener from writing into the hidden composer while the editor
+  /// owns dictation.
+  bool _editorOpen = false;
+
   /// The currently shown "note deleted" notice, plus the data needed to undo.
   /// Shown at the top of the body so it never covers the composer input.
   ({int index, Note note})? _deletedNotice;
@@ -65,6 +70,9 @@ class _NotesScreenState extends State<NotesScreen> {
   }
 
   void _onWords() {
+    // While the editor is open it owns the mic; ignore updates here so we
+    // don't clobber the composer hidden underneath.
+    if (_editorOpen) return;
     final words = _speech.lastWords.value;
     final merged = _dictationBase.isEmpty
         ? words
@@ -100,6 +108,10 @@ class _NotesScreenState extends State<NotesScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Speech recognition is not available on this device.'),
+          // Float *above* the composer so the input field stays tappable
+          // while the message is visible.
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.fromLTRB(16, 0, 16, 84),
         ),
       );
       return;
@@ -115,6 +127,7 @@ class _NotesScreenState extends State<NotesScreen> {
     final navigator = Navigator.of(context);
     // Stop dictating into the composer while editing.
     if (_speech.listening.value) await _speech.stopListening();
+    _editorOpen = true;
     await navigator.push(
       MaterialPageRoute(
         builder: (_) => NoteEditorScreen(
@@ -123,6 +136,7 @@ class _NotesScreenState extends State<NotesScreen> {
         ),
       ),
     );
+    _editorOpen = false;
     if (mounted) setState(() {});
   }
 

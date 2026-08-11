@@ -1,3 +1,5 @@
+import 'dart:math';
+
 /// A single note / todo point.
 class Note {
   Note({
@@ -45,7 +47,7 @@ class Note {
   factory Note.create(String text) {
     final now = DateTime.now();
     return Note(
-      id: '${now.microsecondsSinceEpoch}-${now.millisecond}',
+      id: '${now.microsecondsSinceEpoch}-${Random().nextInt(1 << 32)}',
       text: text,
       isDone: false,
       createdAt: now,
