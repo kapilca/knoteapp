@@ -9,8 +9,9 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('renders a reorderable list with a drag handle per note',
-      (tester) async {
+  testWidgets('renders a reorderable list with a drag handle per note', (
+    tester,
+  ) async {
     await tester.pumpWidget(const NotesApp());
     await tester.pumpAndSettle();
 

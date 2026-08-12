@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -25,6 +27,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   late final TextEditingController _text;
   final SpeechService _speech = SpeechService.instance;
   String _dictationBase = '';
+  Timer? _saveTimer;
 
   @override
   void initState() {
@@ -34,6 +37,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     _text.addListener(_onTextChanged);
     _speech.listening.addListener(_onState);
     _speech.lastWords.addListener(_onWords);
+    _speech.lastError.addListener(_onState);
   }
 
   @override
@@ -41,8 +45,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     _text.removeListener(_onTextChanged);
     _speech.listening.removeListener(_onState);
     _speech.lastWords.removeListener(_onWords);
+    _speech.lastError.removeListener(_onState);
+    _saveTimer?.cancel();
     if (_speech.listening.value) _speech.stopListening();
     final trimmed = _text.text.trim();
+    if (trimmed.isNotEmpty) unawaited(widget.controller.save());
     _text.dispose();
     // A note that's been emptied has no value — remove it.
     if (trimmed.isEmpty) {
@@ -58,6 +65,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   }
 
   void _onTextChanged() {
+    widget.controller.update(widget.noteId, _text.text, persist: false);
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 400), () {
+      unawaited(widget.controller.save());
+    });
     if (mounted) setState(() {});
   }
 
@@ -70,7 +82,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       text: merged,
       selection: TextSelection.collapsed(offset: merged.length),
     );
-    widget.controller.update(widget.noteId, merged);
   }
 
   Future<void> _toggleMic() async {
@@ -97,7 +108,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       return;
     }
     _dictationBase = _text.text.trim();
-    await _speech.startListening();
+    try {
+      await _speech.startListening();
+    } catch (_) {
+      if (mounted) setState(() {});
+      return;
+    }
     if (mounted) setState(() {});
   }
 
@@ -168,71 +184,78 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         ],
       ),
       body: AnimatedBuilder(
-          animation: widget.controller,
-              builder: (context, _) {
-                final n = widget.controller.findById(widget.noteId);
-                if (n == null) {
-                  return const Center(child: Text('This note no longer exists.'));
-                }
-                return Column(
-                  children: [
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: TextField(
-                          controller: _text,
-                          autofocus: true,
-                          maxLines: null,
-                          expands: true,
-                          textCapitalization: TextCapitalization.sentences,
-                          textAlignVertical: TextAlignVertical.top,
-                          style: theme.textTheme.bodyLarge,
-                          decoration: const InputDecoration(
-                            hintText: 'Type your note…',
-                            border: InputBorder.none,
-                          ),
-                          onChanged: (value) =>
-                              widget.controller.update(widget.noteId, value),
-                        ),
+        animation: widget.controller,
+        builder: (context, _) {
+          final n = widget.controller.findById(widget.noteId);
+          if (n == null) {
+            return const Center(child: Text('This note no longer exists.'));
+          }
+          return Column(
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: TextField(
+                    controller: _text,
+                    autofocus: true,
+                    maxLines: null,
+                    expands: true,
+                    textCapitalization: TextCapitalization.sentences,
+                    textAlignVertical: TextAlignVertical.top,
+                    style: theme.textTheme.bodyLarge,
+                    decoration: const InputDecoration(
+                      hintText: 'Type your note…',
+                      border: InputBorder.none,
+                    ),
+                  ),
+                ),
+              ),
+              if (_speech.lastError.value != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Dictation error: ${_speech.lastError.value}',
+                      style: TextStyle(
+                        color: theme.colorScheme.error,
+                        fontSize: 12,
                       ),
                     ),
-                    SafeArea(
-                      top: false,
-                      child: Column(
-                        children: [
-                          Divider(height: 1, color: theme.dividerColor),
-                          SwitchListTile(
-                            secondary: Icon(
-                              n.isDone
-                                  ? Icons.check_circle
-                                  : Icons.circle_outlined,
-                              color: theme.colorScheme.primary,
-                            ),
-                            title: Text(
-                              n.isDone ? 'Completed' : 'Mark as completed',
-                            ),
-                            value: n.isDone,
-                            onChanged: (_) =>
-                                widget.controller.toggle(widget.noteId),
-                          ),
-                          ListTile(
-                            dense: true,
-                            leading: Icon(
-                              Icons.access_time,
-                              color: theme.colorScheme.outline,
-                            ),
-                            title: Text(
-                              'Created ${DateFormat.yMMMd().add_jm().format(n.createdAt)}',
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ),
-                        ],
+                  ),
+                ),
+              SafeArea(
+                top: false,
+                child: Column(
+                  children: [
+                    Divider(height: 1, color: theme.dividerColor),
+                    SwitchListTile(
+                      secondary: Icon(
+                        n.isDone ? Icons.check_circle : Icons.circle_outlined,
+                        color: theme.colorScheme.primary,
+                      ),
+                      title: Text(n.isDone ? 'Completed' : 'Mark as completed'),
+                      value: n.isDone,
+                      onChanged: (_) => widget.controller.toggle(widget.noteId),
+                    ),
+                    ListTile(
+                      dense: true,
+                      leading: Icon(
+                        Icons.access_time,
+                        color: theme.colorScheme.outline,
+                      ),
+                      title: Text(
+                        'Created ${DateFormat.yMMMd().add_jm().format(n.createdAt)}',
+                        style: theme.textTheme.bodySmall,
                       ),
                     ),
                   ],
-                );
-              },
-            ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'editor-dictate',
         onPressed: _toggleMic,

@@ -9,8 +9,9 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('strike-through button line-throughs a note (no delete)',
-      (tester) async {
+  testWidgets('strike-through button line-throughs a note (no delete)', (
+    tester,
+  ) async {
     await tester.pumpWidget(const NotesApp());
     await tester.pumpAndSettle();
 
@@ -30,8 +31,9 @@ void main() {
     expect(find.byIcon(Icons.check_circle), findsOneWidget);
   });
 
-  testWidgets('striking out the last note auto-clears the whole list',
-      (tester) async {
+  testWidgets('completed notes remain until explicitly cleared', (
+    tester,
+  ) async {
     await tester.pumpWidget(const NotesApp());
     await tester.pumpAndSettle();
 
@@ -40,11 +42,18 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.byIcon(Icons.format_strikethrough));
-    // Advance past the auto-clear delay, then settle the rebuild.
-    await tester.pump(const Duration(milliseconds: 700));
     await tester.pumpAndSettle();
 
-    // List cleared itself → back to the empty state.
+    expect(find.text('Only note'), findsOneWidget);
+    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.more_vert));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Clear completed (1)'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Clear').last);
+    await tester.pumpAndSettle();
+
     expect(find.text('Only note'), findsNothing);
     expect(find.text('No notes yet'), findsOneWidget);
   });

@@ -28,7 +28,11 @@ class NotesScreen extends StatefulWidget {
 
 class _NotesScreenState extends State<NotesScreen> {
   final TextEditingController _input = TextEditingController();
+  final TextEditingController _search = TextEditingController();
   final SpeechService _speech = SpeechService.instance;
+  String _query = '';
+  _NoteFilter _filter = _NoteFilter.all;
+  bool _searchOpen = false;
 
   /// Text present in the composer when dictation started; recognized words are
   /// appended after it.
@@ -51,6 +55,7 @@ class _NotesScreenState extends State<NotesScreen> {
     super.initState();
     _speech.listening.addListener(_onSpeechState);
     _speech.available.addListener(_onSpeechState);
+    _speech.lastError.addListener(_onSpeechState);
     _speech.lastWords.addListener(_onWords);
   }
 
@@ -58,10 +63,12 @@ class _NotesScreenState extends State<NotesScreen> {
   void dispose() {
     _speech.listening.removeListener(_onSpeechState);
     _speech.available.removeListener(_onSpeechState);
+    _speech.lastError.removeListener(_onSpeechState);
     _speech.lastWords.removeListener(_onWords);
     if (_speech.listening.value) _speech.stopListening();
     _noticeTimer?.cancel();
     _input.dispose();
+    _search.dispose();
     super.dispose();
   }
 
@@ -81,6 +88,16 @@ class _NotesScreenState extends State<NotesScreen> {
       text: merged,
       selection: TextSelection.collapsed(offset: merged.length),
     );
+  }
+
+  void _toggleSearch() {
+    setState(() {
+      _searchOpen = !_searchOpen;
+      if (!_searchOpen) {
+        _query = '';
+        _search.clear();
+      }
+    });
   }
 
   void _addNote() {
@@ -117,7 +134,12 @@ class _NotesScreenState extends State<NotesScreen> {
       return;
     }
     _dictationBase = _input.text.trim();
-    await _speech.startListening();
+    try {
+      await _speech.startListening();
+    } catch (_) {
+      if (mounted) setState(() {});
+      return;
+    }
     if (mounted) setState(() {});
   }
 
@@ -130,10 +152,8 @@ class _NotesScreenState extends State<NotesScreen> {
     _editorOpen = true;
     await navigator.push(
       MaterialPageRoute(
-        builder: (_) => NoteEditorScreen(
-          controller: widget.controller,
-          noteId: note.id,
-        ),
+        builder: (_) =>
+            NoteEditorScreen(controller: widget.controller, noteId: note.id),
       ),
     );
     _editorOpen = false;
@@ -142,11 +162,17 @@ class _NotesScreenState extends State<NotesScreen> {
 
   void _deleteNote(int index, Note note) {
     final controller = widget.controller;
+    final originalIndex = controller.indexOf(note.id);
     controller.remove(note.id);
     if (!mounted) return;
     // Show a top banner (instead of a bottom SnackBar) so it never covers the
     // composer. Tapping the banner dismisses it; the Undo button restores it.
-    setState(() => _deletedNotice = (index: index, note: note));
+    setState(
+      () => _deletedNotice = (
+        index: originalIndex < 0 ? index : originalIndex,
+        note: note,
+      ),
+    );
     _noticeTimer?.cancel();
     _noticeTimer = Timer(const Duration(seconds: 4), _dismissDeleteNotice);
   }
@@ -193,8 +219,24 @@ class _NotesScreenState extends State<NotesScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Notes'),
+        title: _searchOpen
+            ? TextField(
+                controller: _search,
+                autofocus: true,
+                textInputAction: TextInputAction.search,
+                onChanged: (value) => setState(() => _query = value.trim()),
+                decoration: const InputDecoration(
+                  hintText: 'Search notes',
+                  border: InputBorder.none,
+                ),
+              )
+            : const Text('My Notes'),
         actions: [
+          IconButton(
+            tooltip: _searchOpen ? 'Close search' : 'Search',
+            icon: Icon(_searchOpen ? Icons.close : Icons.search),
+            onPressed: _toggleSearch,
+          ),
           IconButton(
             tooltip: widget.isDark ? 'Light mode' : 'Dark mode',
             icon: Icon(
@@ -207,12 +249,29 @@ class _NotesScreenState extends State<NotesScreen> {
           PopupMenuButton<String>(
             tooltip: 'More',
             icon: const Icon(Icons.more_vert),
-            onSelected: (v) {
-              if (v == 'clear') {
+            onSelected: (value) {
+              if (value == 'clear') {
                 _confirmClearCompleted(controller.completedCount);
+              } else if (value.startsWith('filter:')) {
+                setState(() {
+                  _filter = _NoteFilter.values.byName(value.substring(7));
+                });
               }
             },
             itemBuilder: (_) => [
+              const PopupMenuItem<String>(
+                value: 'filter:all',
+                child: Text('Show all notes'),
+              ),
+              const PopupMenuItem<String>(
+                value: 'filter:active',
+                child: Text('Show active notes'),
+              ),
+              const PopupMenuItem<String>(
+                value: 'filter:completed',
+                child: Text('Show completed notes'),
+              ),
+              const PopupMenuDivider(),
               PopupMenuItem<String>(
                 value: 'clear',
                 enabled: controller.completedCount > 0,
@@ -236,15 +295,30 @@ class _NotesScreenState extends State<NotesScreen> {
           if (!controller.isLoaded) {
             content = const Center(child: CircularProgressIndicator());
           } else {
-            final notes = controller.orderedNotes;
+            final notes = controller.orderedNotes.where((note) {
+              final matchesQuery =
+                  _query.isEmpty ||
+                  note.text.toLowerCase().contains(_query.toLowerCase());
+              final matchesFilter = switch (_filter) {
+                _NoteFilter.all => true,
+                _NoteFilter.active => !note.isDone,
+                _NoteFilter.completed => note.isDone,
+              };
+              return matchesQuery && matchesFilter;
+            }).toList();
             content = notes.isEmpty
-                ? const _EmptyState()
+                ? _EmptyState(
+                    message: _query.isNotEmpty || _filter != _NoteFilter.all
+                        ? 'Try another search or filter.'
+                        : null,
+                  )
                 : _NotesList(
                     notes: notes,
                     onToggle: controller.toggle,
                     onReorderItem: controller.move,
                     onTap: _openEditor,
                     onDelete: _deleteNote,
+                    reorderable: _query.isEmpty && _filter == _NoteFilter.all,
                   );
           }
           return Column(
@@ -256,10 +330,7 @@ class _NotesScreenState extends State<NotesScreen> {
                 switchOutCurve: Curves.easeInCubic,
                 transitionBuilder: (child, animation) => SlideTransition(
                   position: animation.drive(
-                    Tween<Offset>(
-                      begin: const Offset(0, -1),
-                      end: Offset.zero,
-                    ),
+                    Tween<Offset>(begin: const Offset(0, -1), end: Offset.zero),
                   ),
                   child: child,
                 ),
@@ -279,6 +350,7 @@ class _NotesScreenState extends State<NotesScreen> {
                 error: _speech.lastError.value,
                 onSend: _addNote,
                 onMic: _toggleMic,
+                enabled: controller.isLoaded,
               ),
             ],
           );
@@ -295,6 +367,7 @@ class _NotesList extends StatelessWidget {
     required this.onReorderItem,
     required this.onTap,
     required this.onDelete,
+    required this.reorderable,
   });
 
   final List<Note> notes;
@@ -302,45 +375,59 @@ class _NotesList extends StatelessWidget {
   final void Function(int oldIndex, int newIndex) onReorderItem;
   final void Function(Note note) onTap;
   final void Function(int index, Note note) onDelete;
+  final bool reorderable;
+
+  Widget _item(BuildContext context, int index) {
+    final theme = Theme.of(context);
+    final note = notes[index];
+    return Dismissible(
+      key: ValueKey(note.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 24),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.error,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: const Icon(Icons.delete_outline, color: Colors.white),
+      ),
+      onDismissed: (_) => onDelete(index, note),
+      child: NoteTile(
+        index: index,
+        note: note,
+        onToggle: () => onToggle(note.id),
+        onTap: () => onTap(note),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    if (!reorderable) {
+      return ListView.builder(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+        itemCount: notes.length,
+        itemBuilder: _item,
+      );
+    }
+
     return ReorderableListView.builder(
       buildDefaultDragHandles: false,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
       itemCount: notes.length,
       onReorderItem: onReorderItem,
-      itemBuilder: (context, index) {
-        final note = notes[index];
-        return Dismissible(
-          key: ValueKey(note.id),
-          // Swipe left (end -> start) to delete.
-          direction: DismissDirection.endToStart,
-          background: Container(
-            alignment: Alignment.centerRight,
-            padding: const EdgeInsets.only(right: 24),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.error,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Icon(Icons.delete_outline, color: Colors.white),
-          ),
-          onDismissed: (_) => onDelete(index, note),
-          child: NoteTile(
-            index: index,
-            note: note,
-            onToggle: () => onToggle(note.id),
-            onTap: () => onTap(note),
-          ),
-        );
-      },
+      itemBuilder: _item,
     );
   }
 }
 
+enum _NoteFilter { all, active, completed }
+
 class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+  const _EmptyState({this.message});
+
+  final String? message;
 
   @override
   Widget build(BuildContext context) {
@@ -358,12 +445,13 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              'No notes yet',
+              message == null ? 'No notes yet' : 'No matching notes',
               style: theme.textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
             Text(
-              'Type below to jot something down, or tap the mic to dictate.',
+              message ??
+                  'Type below to jot something down, or tap the mic to dictate.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.outline,
@@ -385,6 +473,7 @@ class _Composer extends StatelessWidget {
     required this.error,
     required this.onSend,
     required this.onMic,
+    required this.enabled,
   });
 
   final TextEditingController controller;
@@ -393,6 +482,7 @@ class _Composer extends StatelessWidget {
   final String? error;
   final VoidCallback onSend;
   final VoidCallback onMic;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -408,24 +498,13 @@ class _Composer extends StatelessWidget {
                 controller: controller,
                 minLines: 1,
                 maxLines: 4,
+                enabled: enabled,
+                textInputAction: TextInputAction.done,
                 textCapitalization: TextCapitalization.sentences,
-                // The Return/Enter key submits the note instead of inserting a
-                // newline. Multi-line text still wraps visually; we simply
-                // detect the newline the Return key inserts and submit.
-                onChanged: (value) {
-                  if (value.contains('\n')) {
-                    final cleaned = value.replaceAll('\n', ' ').trim();
-                    controller.value = TextEditingValue(
-                      text: cleaned,
-                      selection: TextSelection.collapsed(
-                        offset: cleaned.length,
-                      ),
-                    );
-                    onSend();
-                  }
-                },
+                onSubmitted: (_) => onSend(),
                 decoration: InputDecoration(
                   hintText: listening ? 'Listening…' : 'Add a note',
+                  errorText: error,
                   prefixIcon: listening
                       ? const Padding(
                           padding: EdgeInsets.all(14),
@@ -438,8 +517,10 @@ class _Composer extends StatelessWidget {
                       : null,
                   filled: true,
                   fillColor: theme.colorScheme.surfaceContainerHigh,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
                     borderSide: BorderSide.none,
@@ -450,6 +531,7 @@ class _Composer extends StatelessWidget {
             const SizedBox(width: 8),
             _MicButton(
               listening: listening,
+              enabled: enabled,
               onPressed: onMic,
             ),
             const SizedBox(width: 8),
@@ -457,7 +539,7 @@ class _Composer extends StatelessWidget {
               heroTag: 'add-note',
               elevation: 0,
               highlightElevation: 0,
-              onPressed: onSend,
+              onPressed: enabled ? onSend : null,
               tooltip: 'Add note',
               child: const Icon(Icons.send),
             ),
@@ -469,9 +551,14 @@ class _Composer extends StatelessWidget {
 }
 
 class _MicButton extends StatelessWidget {
-  const _MicButton({required this.listening, required this.onPressed});
+  const _MicButton({
+    required this.listening,
+    required this.enabled,
+    required this.onPressed,
+  });
 
   final bool listening;
+  final bool enabled;
   final VoidCallback onPressed;
 
   @override
@@ -488,7 +575,7 @@ class _MicButton extends StatelessWidget {
       foregroundColor: listening
           ? theme.colorScheme.onErrorContainer
           : theme.colorScheme.primary,
-      onPressed: onPressed,
+      onPressed: enabled ? onPressed : null,
       child: Icon(listening ? Icons.stop_rounded : Icons.mic_rounded),
     );
   }
@@ -497,7 +584,11 @@ class _MicButton extends StatelessWidget {
 /// Top banner shown after a note is deleted. Tapping anywhere on it dismisses
 /// it (the user has seen it); the Undo button restores the deleted note.
 class _DeleteNotice extends StatelessWidget {
-  const _DeleteNotice({super.key, required this.onDismiss, required this.onUndo});
+  const _DeleteNotice({
+    super.key,
+    required this.onDismiss,
+    required this.onUndo,
+  });
 
   final VoidCallback onDismiss;
   final VoidCallback onUndo;

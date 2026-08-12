@@ -33,20 +33,26 @@ class NoteTile extends StatelessWidget {
     return Card(
       elevation: 0,
       color: note.isDone ? base.withValues(alpha: 0.55) : base,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: ListTile(
         onTap: onTap,
-        contentPadding:
-            const EdgeInsets.only(left: 8, right: 8, top: 4, bottom: 4),
-        leading: ReorderableDragStartListener(
-          index: index,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Icon(
-              Icons.drag_indicator,
-              color: theme.colorScheme.outline,
+        contentPadding: const EdgeInsets.only(
+          left: 8,
+          right: 8,
+          top: 4,
+          bottom: 4,
+        ),
+        leading: Semantics(
+          button: true,
+          label: 'Reorder note ${index + 1}',
+          child: ReorderableDragStartListener(
+            index: index,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Icon(
+                Icons.drag_indicator,
+                color: theme.colorScheme.outline,
+              ),
             ),
           ),
         ),

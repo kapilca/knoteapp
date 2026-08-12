@@ -9,8 +9,9 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('shows the empty state, then adds a note from the composer',
-      (tester) async {
+  testWidgets('shows the empty state, then adds a note from the composer', (
+    tester,
+  ) async {
     await tester.pumpWidget(const NotesApp());
     await tester.pumpAndSettle();
 

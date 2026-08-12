@@ -4,68 +4,96 @@ import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
 /// Thin wrapper around the `speech_to_text` plugin.
-///
-/// Exposes a simple ValueNotifier-driven controller so the UI can react to
-/// availability, listening state, and live partial recognition results. The
-/// UI merges [lastWords] into whichever text field it wants — there is no
-/// single shared callback, which keeps multiple screens (composer + editor)
-/// from clobbering each other.
 class SpeechService {
   SpeechService._() : _speech = SpeechToText();
 
   static final SpeechService instance = SpeechService._();
 
   final SpeechToText _speech;
+  Future<void>? _initialization;
+  bool _initialized = false;
+  bool _operationInProgress = false;
+  bool _stopRequested = false;
 
-  /// Whether speech recognition is available on this device.
   final ValueNotifier<bool> available = ValueNotifier<bool>(false);
-
-  /// Whether we are currently listening.
   final ValueNotifier<bool> listening = ValueNotifier<bool>(false);
-
-  /// Latest recognized text (updates live as the user speaks).
-  ///
-  /// Resets to an empty string each time [startListening] is called.
   final ValueNotifier<String> lastWords = ValueNotifier<String>('');
-
-  /// Latest error message, if any (cleared on next successful start).
   final ValueNotifier<String?> lastError = ValueNotifier<String?>(null);
 
-  Future<void> init() async {
-    final ok = await _speech.initialize(
-      onError: (SpeechRecognitionError error) {
-        lastError.value = error.errorMsg;
-        listening.value = false;
-      },
-      onStatus: (String status) {
-        listening.value = status == 'listening';
-      },
-    );
-    available.value = ok;
+  Future<void> init() {
+    if (_initialized) return Future<void>.value();
+    return _initialization ??= _initialize();
+  }
+
+  Future<void> _initialize() async {
+    try {
+      final ok = await _speech.initialize(
+        onError: (SpeechRecognitionError error) {
+          lastError.value = error.errorMsg;
+          listening.value = false;
+        },
+        onStatus: (String status) {
+          listening.value = status == 'listening';
+        },
+      );
+      available.value = ok;
+      _initialized = ok;
+    } catch (error) {
+      available.value = false;
+      lastError.value = error.toString();
+      rethrow;
+    } finally {
+      _initialization = null;
+    }
   }
 
   /// Start listening. Recognized text streams into [lastWords].
   Future<void> startListening({String localeId = 'en_US'}) async {
+    if (_operationInProgress || listening.value) return;
+    _operationInProgress = true;
+    _stopRequested = false;
     lastError.value = null;
     lastWords.value = '';
-    await _speech.listen(
-      onResult: (SpeechRecognitionResult result) {
-        lastWords.value = result.recognizedWords;
-      },
-      listenOptions: SpeechListenOptions(
-        listenFor: const Duration(seconds: 30),
-        pauseFor: const Duration(seconds: 4),
-        partialResults: true,
-        localeId: localeId,
-        cancelOnError: true,
-        listenMode: ListenMode.dictation,
-      ),
-    );
-    listening.value = true;
+    try {
+      await _speech.listen(
+        onResult: (SpeechRecognitionResult result) {
+          lastWords.value = result.recognizedWords;
+        },
+        listenOptions: SpeechListenOptions(
+          listenFor: const Duration(seconds: 30),
+          pauseFor: const Duration(seconds: 4),
+          partialResults: true,
+          localeId: localeId,
+          cancelOnError: true,
+          listenMode: ListenMode.dictation,
+        ),
+      );
+      if (_stopRequested) {
+        await _speech.stop();
+        listening.value = false;
+      } else {
+        listening.value = true;
+      }
+    } catch (error) {
+      listening.value = false;
+      lastError.value = error.toString();
+      rethrow;
+    } finally {
+      _operationInProgress = false;
+    }
   }
 
   Future<void> stopListening() async {
-    await _speech.stop();
-    listening.value = false;
+    if (_operationInProgress && !listening.value) {
+      _stopRequested = true;
+      return;
+    }
+    try {
+      await _speech.stop();
+    } catch (error) {
+      lastError.value = error.toString();
+    } finally {
+      listening.value = false;
+    }
   }
 }
